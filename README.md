@@ -1,5 +1,3 @@
-# EV_Charging_Demand_Intelligence
-An interactive Streamlit dashboard for EV charging demand analysis, machine learning-based demand prediction and classification, and time-series forecasting. Built with Python, Pandas, Plotly, and Scikit-learn to transform charging data into actionable insights for understanding demand trends and supporting data-driven decisions.
 # ⚡ EV Charging Demand Intelligence Dashboard
 
 An interactive Streamlit dashboard for exploring electric-vehicle (EV) charging demand, understanding historical usage patterns, and generating machine-learning predictions and baseline time-series forecasts.
