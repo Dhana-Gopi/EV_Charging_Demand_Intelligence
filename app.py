@@ -30,6 +30,7 @@ h1,h2,h3 {{color:{DARK}!important}}
 .header {{text-align:center;font-size:29px;font-weight:900;font-style:italic;text-decoration:underline;padding:15px 0 2px}}
 .subheader {{text-align:center;color:{GREY};font-size:13px;margin-bottom:12px}}
 [data-baseweb="tab-highlight"] {{background:{YELLOW}!important}}
+.board-insight {{background:#FFFBE6;border-left:4px solid #F2C300;border-radius:7px;padding:12px 13px;margin:0 0 12px;font-size:13px;line-height:1.6}} .board-title {{font-size:13px;font-weight:800;margin-bottom:6px;color:#222}}
 </style>''', unsafe_allow_html=True)
 
 def note(message):
@@ -126,6 +127,56 @@ def hourly_line(g):
     fig.update_yaxes(title='Average demand')
     return fig
 
+
+def board_section(title, narrative, implication=None):
+    safe_title=html.escape(title)
+    safe_body=html.escape(narrative)
+    tail=(f'<div style="margin-top:7px"><b>Management implication:</b> {html.escape(implication)}</div>' if implication else '')
+    st.markdown(f'<div class="board-insight"><div class="board-title">{safe_title}</div><div>{safe_body}</div>{tail}</div>',unsafe_allow_html=True)
+
+def board_story(df, overall, filtered=False, selection=None):
+    """Compute board-ready interpretations from the exact displayed subset."""
+    n=len(df); start=df.StartDatetime.min(); end=df.StartDatetime.max()
+    loc=df.groupby('Location').agg(avg=('Demand','mean'),sessions=('Demand','size')).sort_values('avg',ascending=False)
+    busy=loc.sort_values('sessions',ascending=False)
+    scope=(f'Selected view: location {selection[0]}, year {selection[1]}, company {selection[2]}, type {selection[3]}. ' if filtered else '')
+    share=f' This represents {n/len(overall):.1%} of all cleaned records.' if filtered else ''
+    board_section('01 | Scope and purpose',f'{scope}From {start:%d %b %Y} to {end:%d %b %Y}, this view covers {n:,} charging sessions across {len(loc)} location category/categories. Average demand is {df.Demand.mean():.2f} units per session; average duration is {df.Duration.mean():.1f} minutes.{share} Demand units follow the source dataset.', 'Use these measures to assess charging-session behavior, not station utilization or installed capacity.')
+    top=loc.iloc[0]; high=loc.index[0]; peak=busy.iloc[0]; busy_name=busy.index[0]
+    if len(loc)>1:
+        narrative=f'{high} leads in average demand at {top.avg:.2f} units across {int(top.sessions):,} sessions. {busy_name} has the highest activity at {int(peak.sessions):,} sessions (average demand {peak.avg:.2f}). High per-session demand and high traffic are different priorities.'
+    else:
+        narrative=f'{high} contributes {int(top.sessions):,} sessions, averaging {top.avg:.2f} demand units. Its historical full-dataset average is {overall.loc[overall.Location==high,"Demand"].mean():.2f}; the current filters may select only part of its activity.'
+    board_section('02 | Location performance',narrative,'Review throughput and busy periods at high-volume locations; examine high-demand locations separately. Do not infer capacity shortages from averages alone.')
+    for field,label in [('ChargerCompany','company'),('ChargerType','type')]:
+        g=df.groupby(field).agg(avg=('Demand','mean'),sessions=('Demand','size')).sort_values('avg',ascending=False)
+        if len(g)>1:
+            leader=g.iloc[0]; second=g.iloc[-1]
+            desc=f'{label.title()} {g.index[0]} averages {leader.avg:.2f} units over {int(leader.sessions):,} sessions, compared with {label} {g.index[-1]} at {second.avg:.2f} units over {int(second.sessions):,} sessions. This is an observed difference, not proof that one option causes higher demand.'
+        else:
+            desc=f'Only {label} {g.index[0]} is represented in the current selection: {int(g.iloc[0].sessions):,} sessions averaging {g.iloc[0].avg:.2f} units. No comparison with excluded {label}s is possible.'
+        board_section('03 | Charger '+label.title(),desc,'Compare demand together with session volumes and location mix. Numeric codes are not verified equipment specifications.')
+    combo=df.groupby(['ChargerCompany','ChargerType']).agg(avg=('Demand','mean'),sessions=('Demand','size')).sort_values('sessions',ascending=False)
+    k=combo.index[0]; v=combo.iloc[0]
+    board_section('04 | Observed company/type mix',f'The most frequently observed combination is Company {k[0]} / Type {k[1]}, with {int(v.sessions):,} sessions and {v.avg:.2f} average demand. There are {len(combo)} observed combinations in this selection; absent combinations are not assumed to exist.','Investigate the configurations that handle the most sessions, while checking per-session demand separately.')
+    h=df.groupby('StartHour').agg(avg=('Demand','mean'),sessions=('Demand','size'))
+    peak_hour=int(h.avg.idxmax()); peak_n=int(h.loc[peak_hour,'sessions'])
+    busy_hour=int(h.sessions.idxmax())
+    board_section('05 | Hourly charging behavior',f'Sessions starting at {peak_hour:02d}:00 have the highest average demand ({h.loc[peak_hour,"avg"]:.2f} units; {peak_n:,} sessions). The largest number of sessions begins at {busy_hour:02d}:00 ({int(h.loc[busy_hour,"sessions"]):,} sessions). These are different indicators.','Investigate staffing, scheduling, and power requirements at relevant hours. Start-hour demand is not a measurement of instantaneous grid load.')
+    durations=df.groupby('Location').Duration.mean().sort_values(ascending=False)
+    board_section('06 | Duration and turnover',f'Average session duration is {df.Duration.mean():.1f} minutes. {durations.index[0]} records the longest location-level mean at {durations.iloc[0]:.1f} minutes within the selection.','Long stays may affect turnover; confirm actual charger occupancy and queues before claiming congestion.')
+    months=df.groupby('MonthLabel').agg(avg=('Demand','mean'),sessions=('Demand','size'))
+    days=df.groupby('DayName').Demand.mean().sort_values(ascending=False)
+    if len(months)>1:
+        best=months.avg.idxmax(); worst=months.avg.idxmin()
+        temporal=f'Among {len(months)} observed months, {best} has the highest mean demand ({months.loc[best,"avg"]:.2f}; {int(months.loc[best,"sessions"]):,} sessions) and {worst} the lowest ({months.loc[worst,"avg"]:.2f}). '
+    else:
+        temporal=f'The selection contains {len(months)} observed month, so no month-to-month trend can be inferred. '
+    temporal+=f'{days.index[0]} has the highest weekday mean ({days.iloc[0]:.2f}). Partial or low-volume months should not be treated as representative.'
+    board_section('07 | Calendar patterns',temporal,'Use these observations for historical planning; this is not a future demand forecast.')
+    caution=(' The selection has fewer than 100 sessions, so averages may be unstable.' if n<100 else (' This selection has fewer than 500 sessions; interpret subgroup comparisons cautiously.' if n<500 else ''))
+    board_section('08 | Decision and limitations',f'Prioritize reviewing the busiest locations and hours, then assess high-demand configurations and long-duration sessions.{caution} The dataset does not provide installed charger counts, charging power ratings, queues, occupancy, or evidence of causality.','Validate equipment capacity and operational data before recommending expansion, replacement, or staffing changes.')
+
 def summary_note(df):
     loc=df.groupby('Location').agg(Avg=('Demand','mean'),Sessions=('Demand','size')).sort_values('Avg',ascending=False)
     top=loc.index[0]
@@ -199,12 +250,8 @@ if page=='Executive Overview':
             chart(bar(g,'DayName','Demand'),280)
             note(f'{g.loc[g.Demand.idxmax(),"DayName"]} has the highest recorded mean demand ({g.Demand.max():.2f}).')
     with right:
-        st.markdown('### 💡 Key Takeaways')
-        note(summary_note(data))
-        note(f'Overall mean demand: {data.Demand.mean():.2f}; median: {data.Demand.median():.2f}.')
-        note('Company 0 and 1, and Type 0 and 1, are source-dataset codes—not verified brand names or charger power ratings.')
-        note('Operational priority: investigate high-volume public-area sessions and their busiest hours, then verify installed chargers, utilization and queues before recommending expansion.')
-        note('Limitations: this dataset does not directly measure queue lengths, occupancy, charging capacity, or causal effects.')
+        st.markdown('### 💡 Executive Briefing')
+        board_story(data,data)
 
 elif page=='Location-Wise Demand Analysis':
     st.subheader('📍 Location-Wise Demand Analysis')
@@ -273,12 +320,8 @@ elif page=='Location-Wise Demand Analysis':
             chart(bar(g,'Combo','Sessions'))
             note(f'{g.loc[g.Sessions.idxmax(),"Combo"]} has most recorded sessions ({g.Sessions.max():,}); this is not a count of installed chargers.')
     with right:
-        st.markdown('### 💡 Filtered Key Takeaways')
-        note(f'This selection includes {len(d):,} sessions, {d.Location.nunique()} location(s), average demand {d.Demand.mean():.2f}, and average duration {d.Duration.mean():.1f} min.')
-        note('Within the current filters: '+summary_note(d))
-        note(f'Median demand is {d.Demand.median():.2f}. {len(d)/len(data):.1%} of cleaned historical records are included.')
-        if len(d)<100: note('Small-sample caution: fewer than 100 sessions match the selected filters; rankings may be unstable.')
-        note('All charts and notes use the selected records only. A single selected location or charger category cannot support between-group comparisons; results are descriptive, not causal.')
+        st.markdown('### 💡 Filtered Executive Briefing')
+        board_story(d,data,filtered=True,selection=(loc,year,company,ctype))
 
 else:
     is_class=page=='Demand Classification'
