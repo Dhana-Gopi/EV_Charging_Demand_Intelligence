@@ -1,6 +1,6 @@
 """EV Charging Demand Intelligence | Streamlit dashboard.
 Run: streamlit run ev_app.py
-Place ChargingRecords.csv beside this file and trained .pkl files inside models/.
+Place ChargingRecords.csv and the six trained .pkl files beside this file.
 """
 from pathlib import Path
 import pickle
@@ -35,12 +35,28 @@ h1,h2,h3 {{color:{DARK}!important}}
 def note(message):
     st.markdown(f'<div class="insight">{html.escape(str(message))}</div>',unsafe_allow_html=True)
 
-def chart(fig, height=265):
+def chart(fig, height=300):
     fig.update_layout(height=height, margin=dict(l=8,r=8,t=18,b=8),paper_bgcolor=WHITE,plot_bgcolor=WHITE,
                       font=dict(color=DARK,size=11),legend=dict(orientation='h',y=-0.22),colorway=YELLOWS)
     fig.update_xaxes(showgrid=False,zeroline=False)
     fig.update_yaxes(gridcolor='#F2F2F2',zeroline=False)
-    st.plotly_chart(fig,use_container_width=True,config={'displayModeBar':False})
+    st.plotly_chart(fig,width='stretch',config={'displayModeBar':False})
+
+def location_bar(frame, value, title=None, counts=False):
+    """Horizontal ranking: full names remain readable in compact dashboard columns."""
+    frame = frame.sort_values(value, ascending=True).copy()
+    fig = go.Figure(go.Bar(
+        x=frame[value], y=frame['Location'].astype(str), orientation='h',
+        marker_color=YELLOW,
+        customdata=frame[['Sessions']].to_numpy() if 'Sessions' in frame else None,
+        hovertemplate='%{y}<br>Value: %{x:,.2f}<extra></extra>',
+        text=[f'{v:,.0f}' if counts else f'{v:.2f}' for v in frame[value]],
+        textposition='outside', cliponaxis=False))
+    fig.update_layout(xaxis_title=title or value, yaxis_title='',
+                      margin=dict(l=10,r=36,t=12,b=20))
+    fig.update_yaxes(automargin=True, tickfont=dict(size=10))
+    fig.update_xaxes(automargin=True)
+    return fig
 
 def heading(text):
     st.markdown(f'<div class="chart-title">{html.escape(text)}</div>',unsafe_allow_html=True)
@@ -103,6 +119,13 @@ def bar(df,x,y,orientation='v',color=None):
     fig.update_traces(marker_line_width=0,textposition='outside',cliponaxis=False)
     return fig
 
+def hourly_line(g):
+    fig=px.line(g,x='StartHour',y='Demand',markers=True,color_discrete_sequence=[YELLOW])
+    fig.update_xaxes(tickmode='array',tickvals=list(range(0,24,3)),
+                     ticktext=[f'{h:02d}:00' for h in range(0,24,3)],title='Charging start hour')
+    fig.update_yaxes(title='Average demand')
+    return fig
+
 def summary_note(df):
     loc=df.groupby('Location').agg(Avg=('Demand','mean'),Sessions=('Demand','size')).sort_values('Avg',ascending=False)
     top=loc.index[0]
@@ -132,12 +155,12 @@ if page=='Executive Overview':
         with a:
             heading('Average Demand by Location')
             g=data.groupby('Location',as_index=False).agg(AvgDemand=('Demand','mean'),Sessions=('Demand','size')).sort_values('AvgDemand',ascending=False)
-            chart(bar(g,'Location','AvgDemand'))
-            note(f'Highest mean: {g.iloc[0].Location} ({g.iloc[0].AvgDemand:.2f}, n={g.iloc[0].Sessions:,}). Consider sample size before ranking investments.')
+            chart(location_bar(g,'AvgDemand','Average demand'),355)
+            note(f'{g.iloc[0].Location} has the highest average demand ({g.iloc[0].AvgDemand:.2f}) but only {g.iloc[0].Sessions:,} sessions. Compare sample size and session volume before considering infrastructure expansion.')
         with b:
             heading('Average Demand by Start Hour')
             g=data.groupby('StartHour',as_index=False).Demand.mean()
-            chart(px.line(g,x='StartHour',y='Demand',markers=True,color_discrete_sequence=[YELLOW]))
+            chart(hourly_line(g),300)
             note(f'Peak recorded start hour: {int(g.loc[g.Demand.idxmax(),"StartHour"]):02d}:00 (average {g.Demand.max():.2f}).')
         with c:
             heading('Demand by Charger Type')
@@ -149,8 +172,8 @@ if page=='Executive Overview':
         with a:
             heading('Charging Sessions by Location')
             g=data.groupby('Location').size().reset_index(name='Sessions').sort_values('Sessions',ascending=False)
-            chart(bar(g,'Location','Sessions'))
-            note(f'{g.iloc[0].Location} records the largest number of charging sessions ({g.iloc[0].Sessions:,}).')
+            chart(location_bar(g,'Sessions','Sessions',counts=True),355)
+            note(f'{g.iloc[0].Location} handles the most recorded sessions ({g.iloc[0].Sessions:,}). Prioritize reviewing its busiest hours and existing capacity; volume alone does not prove congestion.')
         with b:
             heading('Company / Type Demand')
             g=data.groupby(['ChargerCompany','ChargerType'],as_index=False).Demand.mean()
@@ -160,7 +183,7 @@ if page=='Executive Overview':
         with c:
             heading('Average Duration by Location')
             g=data.groupby('Location',as_index=False).Duration.mean().sort_values('Duration',ascending=False)
-            chart(bar(g,'Location','Duration'))
+            chart(location_bar(g,'Duration','Minutes'),355)
             note(f'{g.iloc[0].Location} has the longest mean recorded duration ({g.iloc[0].Duration:.1f} minutes). Duration is not charger utilization.')
         a,b=st.columns(2)
         with a:
@@ -180,7 +203,7 @@ if page=='Executive Overview':
         note(summary_note(data))
         note(f'Overall mean demand: {data.Demand.mean():.2f}; median: {data.Demand.median():.2f}.')
         note('Company 0 and 1, and Type 0 and 1, are source-dataset codes—not verified brand names or charger power ratings.')
-        note('Recommendations: review both session volume and mean demand, inspect busy hours, and validate station counts/capacity before infrastructure decisions.')
+        note('Operational priority: investigate high-volume public-area sessions and their busiest hours, then verify installed chargers, utilization and queues before recommending expansion.')
         note('Limitations: this dataset does not directly measure queue lengths, occupancy, charging capacity, or causal effects.')
 
 elif page=='Location-Wise Demand Analysis':
@@ -205,8 +228,8 @@ elif page=='Location-Wise Demand Analysis':
         with a:
             heading('Mean Demand by Location')
             g=d.groupby('Location',as_index=False).agg(Avg=('Demand','mean'),Sessions=('Demand','size')).sort_values('Avg',ascending=False)
-            chart(bar(g,'Location','Avg'))
-            note(f'{g.iloc[0].Location} leads with {g.iloc[0].Avg:.2f} average demand across {g.iloc[0].Sessions:,} selected sessions.')
+            chart(location_bar(g,'Avg','Average demand'),355)
+            note(f'Within the current filter selection, {g.iloc[0].Location} has the highest mean demand ({g.iloc[0].Avg:.2f}; {g.iloc[0].Sessions:,} sessions). This is a filtered comparison, not an overall ranking.')
         with b:
             heading('Demand by Charger Company')
             g=d.groupby('ChargerCompany',as_index=False).agg(Avg=('Demand','mean'),Sessions=('Demand','size'))
@@ -229,12 +252,12 @@ elif page=='Location-Wise Demand Analysis':
         with b:
             heading('Hourly Demand Pattern')
             g=d.groupby('StartHour',as_index=False).Demand.mean()
-            chart(px.line(g,x='StartHour',y='Demand',markers=True,color_discrete_sequence=[YELLOW]))
+            chart(hourly_line(g),300)
             note(f'Peak start hour for this selection: {int(g.loc[g.Demand.idxmax(),"StartHour"]):02d}:00; mean {g.Demand.max():.2f}.')
         with c:
             heading('Charging Duration by Location')
             g=d.groupby('Location',as_index=False).Duration.mean().sort_values('Duration',ascending=False)
-            chart(bar(g,'Location','Duration'))
+            chart(location_bar(g,'Duration','Minutes'),355)
             note(f'Longest average session duration: {g.iloc[0].Location}, {g.iloc[0].Duration:.1f} minutes.')
         a,b=st.columns(2)
         with a:
@@ -252,10 +275,10 @@ elif page=='Location-Wise Demand Analysis':
     with right:
         st.markdown('### 💡 Filtered Key Takeaways')
         note(f'This selection includes {len(d):,} sessions, {d.Location.nunique()} location(s), average demand {d.Demand.mean():.2f}, and average duration {d.Duration.mean():.1f} min.')
-        note(summary_note(d))
+        note('Within the current filters: '+summary_note(d))
         note(f'Median demand is {d.Demand.median():.2f}. {len(d)/len(data):.1%} of cleaned historical records are included.')
         if len(d)<100: note('Small-sample caution: fewer than 100 sessions match the selected filters; rankings may be unstable.')
-        note('Changing filters updates every chart and note. Filtered comparisons are descriptive, not proof of why demand differs.')
+        note('All charts and notes use the selected records only. A single selected location or charger category cannot support between-group comparisons; results are descriptive, not causal.')
 
 else:
     is_class=page=='Demand Classification'
