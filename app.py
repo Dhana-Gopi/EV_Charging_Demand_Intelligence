@@ -74,7 +74,7 @@ def load_data():
 
 @st.cache_resource(show_spinner=False)
 def load_models():
-    folder = BASE/'models'
+    folder = BASE
     filenames = {'reg':'lightgbm_demand_model.pkl','pre':'demand_preprocessor.pkl',
                  'reg_features':'demand_feature_columns.pkl','cls':'lightgbm_demand_classifier.pkl',
                  'cls_features':'classification_feature_columns.pkl','threshold':'demand_classification_threshold.pkl'}
